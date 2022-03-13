@@ -19,8 +19,12 @@
 //! regions, cache and allocation alignments.
 
 use std::alloc::{handle_alloc_error, Layout};
+use std::error::Error;
 use std::mem::size_of;
 use std::ptr::NonNull;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use memmap::Mmap;
 
 mod alignment;
 mod types;
@@ -36,6 +40,8 @@ unsafe fn null_pointer<T: NativeType>() -> NonNull<T> {
 /// Allocates a cache-aligned memory region of `size` bytes with uninitialized values.
 /// This is more performant than using [allocate_aligned_zeroed] when all bytes will have
 /// an unknown or non-zero value and is semantically similar to `malloc`.
+///
+/// * This function is redirected to zeroed for measuring the actual compressibility *
 pub fn allocate_aligned<T: NativeType>(size: usize) -> NonNull<T> {
     unsafe {
         if size == 0 {
@@ -44,7 +50,7 @@ pub fn allocate_aligned<T: NativeType>(size: usize) -> NonNull<T> {
             let size = size * size_of::<T>();
 
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
-            let raw_ptr = std::alloc::alloc(layout) as *mut T;
+            let raw_ptr = std::alloc::alloc_zeroed(layout) as *mut T;
             NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
         }
     }
@@ -78,6 +84,7 @@ pub fn allocate_aligned_zeroed<T: NativeType>(size: usize) -> NonNull<T> {
 pub unsafe fn free_aligned<T: NativeType>(ptr: NonNull<T>, size: usize) {
     if ptr != null_pointer() {
         let size = size * size_of::<T>();
+        dump_mem(ptr.as_ptr() as *const u8, size);
         std::alloc::dealloc(
             ptr.as_ptr() as *mut u8,
             Layout::from_size_align_unchecked(size, ALIGNMENT),
@@ -111,7 +118,7 @@ pub unsafe fn reallocate<T: NativeType>(
         free_aligned(ptr, old_size);
         return null_pointer();
     }
-
+    dump_mem(ptr.as_ptr() as *const u8, old_size);
     let raw_ptr = std::alloc::realloc(
         ptr.as_ptr() as *mut u8,
         Layout::from_size_align_unchecked(old_size, ALIGNMENT),
@@ -120,4 +127,43 @@ pub unsafe fn reallocate<T: NativeType>(
     NonNull::new(raw_ptr).unwrap_or_else(|| {
         handle_alloc_error(Layout::from_size_align_unchecked(new_size, ALIGNMENT))
     })
+}
+
+fn get_memmap(_add: *const u8, _len: usize) -> Result<Mmap, Box<dyn Error>> {
+    println!("{}", _add as u64);
+    let mmap = unsafe {
+        memmap::MmapOptions::new()
+            .offset(_add as u64)
+            .len(_len)
+            .map(&File::open("/dev/mem")?)?
+    };
+
+    Ok(mmap)
+}
+
+fn dump_mem(_add: *const u8, _len: usize) {
+    let mmap = match get_memmap(_add, _len) {
+        Ok(m) => m,
+        Err(err) => {
+            panic!("Failed to mmap: {:?}", err);
+        }
+    };
+
+    let raw_ptr = mmap.as_ptr();
+
+    let mut buf = Vec::new();
+    (0.._len).for_each(|x| unsafe {
+        buf.push(std::ptr::read_volatile(raw_ptr.offset(x as isize)));
+    });
+
+    let mut file = match OpenOptions::new().create(true).append(true).open("./mem.dump") {
+        Ok(file) => file,
+        Err(err) => panic!("Failed to open file: {:?}", err),
+    };
+    match file.write_all(&buf[..]) {
+        Err(err) => {
+            panic!("Write failed: {:?}", err);
+        },
+        _ => ()
+    }
 }

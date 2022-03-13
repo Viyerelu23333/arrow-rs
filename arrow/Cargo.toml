@@ -57,6 +57,7 @@ pyo3 = { version = "0.16", optional = true }
 lexical-core = "^0.8"
 multiversion = "0.6.1"
 bitflags = "1.2.1"
+memmap = "0.7.0"
 
 [features]
 default = ["csv", "ipc", "test_utils"]
