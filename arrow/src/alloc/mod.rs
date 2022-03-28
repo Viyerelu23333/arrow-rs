@@ -44,7 +44,7 @@ pub fn allocate_aligned<T: NativeType>(size: usize) -> NonNull<T> {
             let size = size * size_of::<T>();
 
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
-            let raw_ptr = std::alloc::alloc(layout) as *mut T;
+            let raw_ptr = std::alloc::alloc_zeroed(layout) as *mut T;
             NonNull::new(raw_ptr).unwrap_or_else(|| handle_alloc_error(layout))
         }
     }
